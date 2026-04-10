@@ -9,10 +9,9 @@ from googleapiclient.discovery import build
 st.set_page_config(page_title="Inventory Dashboard", layout="wide")
 
 SPREADSHEET_ID = "1j9KOsjrBjnY63r2ZTodrB5HXkHrk4t5vH18wbn-gkOk"
-RANGE_NAME = "Sheet1!A:C"
+RANGE_NAME = "new_inv!A:H"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
 
 # -------------------------
 # GOOGLE SHEETS CONNECTION
@@ -23,7 +22,6 @@ def get_service():
         scopes=SCOPES
     )
     return build("sheets", "v4", credentials=creds)
-
 
 # -------------------------
 # DATA LAYER
@@ -41,13 +39,19 @@ def load_data():
         values = result.get("values", [])
 
         if not values:
-            return pd.DataFrame(columns=["SKU", "pcs", "Piece Cost"])
+            return pd.DataFrame()
 
         df = pd.DataFrame(values[1:], columns=values[0])
 
-        # Ensure numeric types
-        df["pcs"] = pd.to_numeric(df["pcs"], errors="coerce")
-        df["Piece Cost"] = pd.to_numeric(df["Piece Cost"], errors="coerce")
+        # Normalize column names (important for spaces)
+        df.columns = df.columns.str.strip()
+
+        # Convert numeric columns
+        numeric_cols = ["packed", "boxes", "loose pcs", "pcs", "Piece Cost"]
+
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df
 
@@ -66,7 +70,7 @@ def save_data(df):
 
         service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
-            range="Sheet1!A1",
+            range="new_inv!A1",
             valueInputOption="RAW",
             body=body
         ).execute()
@@ -81,10 +85,11 @@ def save_data(df):
 def process_data(df):
     df = df.copy()
 
+    # Recalculate COSG always (ignore sheet value)
+    df["COSG"] = df["pcs"] * df["Piece Cost"]
+
     missing_df = df[df["Piece Cost"].isna()].copy()
     clean_df = df[df["Piece Cost"].notna()].copy()
-
-    clean_df["COSG"] = clean_df["pcs"] * clean_df["Piece Cost"]
 
     return clean_df, missing_df
 
@@ -141,6 +146,11 @@ filtered_df = filtered_df[
 ]
 
 # -------------------------
+# REMOVE AMAZON SKU FROM UI ONLY
+# -------------------------
+display_df = filtered_df.drop(columns=["Amazon Sku"], errors="ignore")
+
+# -------------------------
 # HEADER
 # -------------------------
 st.title("📦 CQNY Warehouse Inventory Dashboard")
@@ -175,7 +185,7 @@ if not missing_df.empty:
 # MAIN TABLE
 # -------------------------
 st.subheader("Inventory Data")
-st.dataframe(filtered_df, use_container_width=True)
+st.dataframe(display_df, use_container_width=True)
 
 # -------------------------
 # TOP ITEMS
@@ -186,7 +196,9 @@ top_items = inventory_df.sort_values(
     by="COSG", ascending=False
 ).head(5)
 
-st.dataframe(top_items, use_container_width=True)
+top_items_display = top_items.drop(columns=["Amazon Sku"], errors="ignore")
+
+st.dataframe(top_items_display, use_container_width=True)
 
 # -------------------------
 # FIX MISSING COSTS
