@@ -8,7 +8,7 @@ from googleapiclient.discovery import build
 # -------------------------
 st.set_page_config(page_title="Inventory Dashboard", layout="wide")
 
-SPREADSHEET_ID = "YOUR_SHEET_ID"
+SPREADSHEET_ID = "1j9KOsjrBjnY63r2ZTodrB5HXkHrk4t5vH18wbn-gkOk"
 RANGE_NAME = "Sheet1!A:C"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
