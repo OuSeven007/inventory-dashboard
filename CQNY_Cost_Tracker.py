@@ -1,53 +1,73 @@
 import streamlit as st
 import pandas as pd
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+from google.cloud import firestore
+from google.oauth2 import service_account
+
 
 # -------------------------
 # CONFIG
 # -------------------------
-st.set_page_config(page_title="Inventory Dashboard", layout="wide")
-
-SPREADSHEET_ID = "1j9KOsjrBjnY63r2ZTodrB5HXkHrk4t5vH18wbn-gkOk"
-RANGE_NAME = "new_inv!A:H"
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+st.set_page_config(
+    page_title="Inventory Dashboard",
+    layout="wide"
+)
 
 # -------------------------
-# GOOGLE SHEETS CONNECTION
+# FIRESTORE CONNECTION
 # -------------------------
-def get_service():
-    creds = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=SCOPES
+@st.cache_resource
+def get_db():
+    creds = service_account.Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"]
     )
-    return build("sheets", "v4", credentials=creds)
+
+    return firestore.Client(
+        credentials=creds,
+        project=st.secrets["gcp_service_account"]["project_id"]
+    )
+
 
 # -------------------------
 # DATA LAYER
+# Auto refresh every 12 hours
 # -------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=43200)
 def load_data():
     try:
-        service = get_service()
+        db = get_db()
 
-        result = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=RANGE_NAME
-        ).execute()
+        docs = db.collection("inventory").stream()
 
-        values = result.get("values", [])
+        data = []
 
-        if not values:
-            return pd.DataFrame()
+        for doc in docs:
+            d = doc.to_dict()
 
-        df = pd.DataFrame(values[1:], columns=values[0])
+            data.append({
+                "SKU": doc.id,
+                "units per box": d.get("units_per_box", 0),
+                "boxes": d.get("boxes", 0),
+                "loose pcs": d.get("loose_units", 0),
+                "pcs": d.get("total_units", 0),
+                "reserved": d.get("reserved_units", 0),
+                "Piece Cost": d.get("piece_cost", None),
+                "Last updated": d.get("updated_at")
+            })
 
-        # Normalize column names (important for spaces)
-        df.columns = df.columns.str.strip()
+        df = pd.DataFrame(data)
 
-        # Convert numeric columns
-        numeric_cols = ["packed", "boxes", "loose pcs", "pcs", "Piece Cost"]
+        if df.empty:
+            return df
+
+        # Numeric conversions
+        numeric_cols = [
+            "boxes",
+            "loose pcs",
+            "units_per_box",
+            "pcs",
+            "reserved",
+            "Piece Cost"
+        ]
 
         for col in numeric_cols:
             if col in df.columns:
@@ -56,28 +76,22 @@ def load_data():
         return df
 
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading Firestore data: {e}")
         return pd.DataFrame()
 
-
-def save_data(df):
+# -------------------------
+# SAVE COST CHANGES TO FIRESTORE
+# -------------------------
+def update_piece_cost(sku, new_cost):
     try:
-        service = get_service()
+        db = get_db()
 
-        values = [df.columns.tolist()] + df.values.tolist()
-
-        body = {"values": values}
-
-        service.spreadsheets().values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range="new_inv!A1",
-            valueInputOption="RAW",
-            body=body
-        ).execute()
+        db.collection("inventory").document(sku).update({
+            "piece_cost": float(new_cost)
+        })
 
     except Exception as e:
-        st.error(f"Error saving data: {e}")
-
+        st.error(f"Error updating {sku}: {e}")
 
 # -------------------------
 # PROCESSING
@@ -85,22 +99,15 @@ def save_data(df):
 def process_data(df):
     df = df.copy()
 
-    # Recalculate COSG always (ignore sheet value)
-    df["COSG"] = df["pcs"] * df["Piece Cost"]
+    if "Piece Cost" not in df.columns:
+        df["Piece Cost"] = None
+
+    df["COSG"] = df["pcs"].fillna(0) * df["Piece Cost"].fillna(0)
 
     missing_df = df[df["Piece Cost"].isna()].copy()
     clean_df = df[df["Piece Cost"].notna()].copy()
 
     return clean_df, missing_df
-
-
-# -------------------------
-# UPDATE LOGIC
-# -------------------------
-def update_piece_cost(df, sku, new_cost):
-    df.loc[df["SKU"] == sku, "Piece Cost"] = new_cost
-    return df
-
 
 # -------------------------
 # LOAD DATA
@@ -108,7 +115,7 @@ def update_piece_cost(df, sku, new_cost):
 raw_df = load_data()
 
 if raw_df.empty:
-    st.warning("No data found in Google Sheet.")
+    st.warning("No inventory data found in Firestore.")
     st.stop()
 
 inventory_df, missing_df = process_data(raw_df)
@@ -123,7 +130,11 @@ selected_skus = st.sidebar.multiselect(
     options=inventory_df["SKU"].dropna().unique()
 )
 
-max_cost_value = float(inventory_df["Piece Cost"].max()) if not inventory_df.empty else 0.0
+max_cost_value = (
+    float(inventory_df["Piece Cost"].max())
+    if not inventory_df.empty and inventory_df["Piece Cost"].notna().any()
+    else 0.0
+)
 
 min_cost, max_cost = st.sidebar.slider(
     "Piece Cost Range",
@@ -138,17 +149,14 @@ min_cost, max_cost = st.sidebar.slider(
 filtered_df = inventory_df.copy()
 
 if selected_skus:
-    filtered_df = filtered_df[filtered_df["SKU"].isin(selected_skus)]
+    filtered_df = filtered_df[
+        filtered_df["SKU"].isin(selected_skus)
+    ]
 
 filtered_df = filtered_df[
     (filtered_df["Piece Cost"] >= min_cost) &
     (filtered_df["Piece Cost"] <= max_cost)
 ]
-
-# -------------------------
-# REMOVE AMAZON SKU FROM UI ONLY
-# -------------------------
-display_df = filtered_df.drop(columns=["Amazon Sku"], errors="ignore")
 
 # -------------------------
 # HEADER
@@ -185,7 +193,7 @@ if not missing_df.empty:
 # MAIN TABLE
 # -------------------------
 st.subheader("Inventory Data")
-st.dataframe(display_df, use_container_width=True)
+st.dataframe(filtered_df, use_container_width=True)
 
 # -------------------------
 # TOP ITEMS
@@ -193,12 +201,11 @@ st.dataframe(display_df, use_container_width=True)
 st.subheader("Top 5 Highest Value SKUs")
 
 top_items = inventory_df.sort_values(
-    by="COSG", ascending=False
+    by="COSG",
+    ascending=False
 ).head(5)
 
-top_items_display = top_items.drop(columns=["Amazon Sku"], errors="ignore")
-
-st.dataframe(top_items_display, use_container_width=True)
+st.dataframe(top_items, use_container_width=True)
 
 # -------------------------
 # FIX MISSING COSTS
@@ -207,16 +214,18 @@ st.subheader("🛠 Fix Missing Costs")
 
 if missing_df.empty:
     st.success("✅ No missing costs!")
+
 else:
     updates = {}
 
     for _, row in missing_df.iterrows():
         sku = row["SKU"]
 
-        col1, col2 = st.columns([2, 1])
-        col1.write(f"SKU: {sku}")
+        c1, c2 = st.columns([2, 1])
 
-        new_cost = col2.number_input(
+        c1.write(f"SKU: {sku}")
+
+        new_cost = c2.number_input(
             f"Cost for {sku}",
             min_value=0.0,
             key=f"cost_{sku}"
@@ -226,10 +235,10 @@ else:
             updates[sku] = new_cost
 
     if st.button("💾 Save Updates"):
-        for sku, cost in updates.items():
-            raw_df = update_piece_cost(raw_df, sku, cost)
 
-        save_data(raw_df)
+        for sku, cost in updates.items():
+            update_piece_cost(sku, cost)
+
         st.cache_data.clear()
 
         st.success("✅ Costs updated successfully!")
@@ -239,4 +248,4 @@ else:
 # FOOTER
 # -------------------------
 st.markdown("---")
-st.caption("Inventory Dashboard • Built with Streamlit")
+st.caption("Inventory Dashboard • Built with Streamlit + Firestore")
