@@ -127,11 +127,27 @@ inventory_df, missing_df = process_data(raw_df)
 # -------------------------
 st.sidebar.header("Filters")
 
+# -------------------------
+# SKU FILTER
+# -------------------------
 selected_skus = st.sidebar.multiselect(
     "Select SKU",
     options=raw_df["SKU"].dropna().unique()
 )
 
+# -------------------------
+# COLUMN FILTER
+# Choose which columns to display
+# -------------------------
+selected_columns = st.sidebar.multiselect(
+    "Select Columns",
+    options=raw_df.columns.tolist() + ["COSG"],
+    default=raw_df.columns.tolist() + ["COSG"]
+)
+
+# -------------------------
+# COST RANGE FILTER
+# -------------------------
 max_cost_value = (
     float(inventory_df["Piece Cost"].max())
     if not inventory_df.empty and inventory_df["Piece Cost"].notna().any()
@@ -144,6 +160,7 @@ min_cost, max_cost = st.sidebar.slider(
     max_cost_value,
     (0.0, max_cost_value)
 )
+
 
 # -------------------------
 # HEADER
@@ -240,6 +257,18 @@ st.dataframe(
     use_container_width=True
 )
 
+st.subheader("Low Stock Alert🚨")
+
+low_stock = inventory_df[
+    (inventory_df["pcs"] < 20) &
+    (inventory_df["pcs"] >= 0)
+]
+
+st.dataframe(
+    low_stock,
+    use_container_width=True
+)
+
 # -------------------------
 # FIX MISSING COSTS
 # -------------------------
@@ -281,4 +310,5 @@ else:
 # FOOTER
 # -------------------------
 st.markdown("---")
-st.caption("Inventory Dashboard • Built with Streamlit + Firestore")
+st.caption("Powered for CQNY Operations")
+
