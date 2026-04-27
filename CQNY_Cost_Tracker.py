@@ -59,11 +59,10 @@ def load_data():
         if df.empty:
             return df
 
-        # Numeric conversions
         numeric_cols = [
             "boxes",
             "loose pcs",
-            "units_per_box",
+            "units per box",
             "pcs",
             "reserved",
             "Piece Cost"
@@ -79,8 +78,9 @@ def load_data():
         st.error(f"Error loading Firestore data: {e}")
         return pd.DataFrame()
 
+
 # -------------------------
-# SAVE COST CHANGES TO FIRESTORE
+# SAVE COST CHANGES
 # -------------------------
 def update_piece_cost(sku, new_cost):
     try:
@@ -92,6 +92,7 @@ def update_piece_cost(sku, new_cost):
 
     except Exception as e:
         st.error(f"Error updating {sku}: {e}")
+
 
 # -------------------------
 # PROCESSING
@@ -108,6 +109,7 @@ def process_data(df):
     clean_df = df[df["Piece Cost"].notna()].copy()
 
     return clean_df, missing_df
+
 
 # -------------------------
 # LOAD DATA
@@ -127,7 +129,7 @@ st.sidebar.header("Filters")
 
 selected_skus = st.sidebar.multiselect(
     "Select SKU",
-    options=inventory_df["SKU"].dropna().unique()
+    options=raw_df["SKU"].dropna().unique()
 )
 
 max_cost_value = (
@@ -144,24 +146,50 @@ min_cost, max_cost = st.sidebar.slider(
 )
 
 # -------------------------
+# HEADER
+# -------------------------
+st.title("📦 CQNY Warehouse Inventory Dashboard")
+
+# -------------------------
+# MAIN TABLE HEADER + TOGGLE
+# -------------------------
+left_col, right_col = st.columns([6, 1])
+
+with left_col:
+    st.subheader("Inventory Data")
+
+with right_col:
+    cost_only = st.toggle(
+        "Has COSG",
+        value=False
+    )
+
+# -------------------------
 # FILTERING
 # -------------------------
-filtered_df = inventory_df.copy()
+if cost_only:
+    filtered_df = inventory_df.copy()
+else:
+    filtered_df = raw_df.copy()
+    filtered_df["COSG"] = (
+        filtered_df["pcs"].fillna(0) *
+        filtered_df["Piece Cost"].fillna(0)
+    )
 
 if selected_skus:
     filtered_df = filtered_df[
         filtered_df["SKU"].isin(selected_skus)
     ]
 
-filtered_df = filtered_df[
-    (filtered_df["Piece Cost"] >= min_cost) &
-    (filtered_df["Piece Cost"] <= max_cost)
-]
-
-# -------------------------
-# HEADER
-# -------------------------
-st.title("📦 CQNY Warehouse Inventory Dashboard")
+if "Piece Cost" in filtered_df.columns:
+    filtered_df = filtered_df[
+        (
+            filtered_df["Piece Cost"].fillna(0) >= min_cost
+        ) &
+        (
+            filtered_df["Piece Cost"].fillna(0) <= max_cost
+        )
+    ]
 
 # -------------------------
 # KPIs
@@ -192,8 +220,10 @@ if not missing_df.empty:
 # -------------------------
 # MAIN TABLE
 # -------------------------
-st.subheader("Inventory Data")
-st.dataframe(filtered_df, use_container_width=True)
+st.dataframe(
+    filtered_df,
+    use_container_width=True
+)
 
 # -------------------------
 # TOP ITEMS
@@ -205,7 +235,10 @@ top_items = inventory_df.sort_values(
     ascending=False
 ).head(5)
 
-st.dataframe(top_items, use_container_width=True)
+st.dataframe(
+    top_items,
+    use_container_width=True
+)
 
 # -------------------------
 # FIX MISSING COSTS
