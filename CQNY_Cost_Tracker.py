@@ -235,12 +235,26 @@ if not missing_df.empty:
     st.warning("⚠️ Some SKUs are missing piece costs!")
 
 # -------------------------
+# APPLY COLUMN FILTER
+# -------------------------
+display_df = filtered_df.copy()
+
+if selected_columns:
+    valid_columns = [
+        col for col in selected_columns
+        if col in display_df.columns
+    ]
+
+    display_df = display_df[valid_columns]
+
+# -------------------------
 # MAIN TABLE
 # -------------------------
 st.dataframe(
-    filtered_df,
+    display_df,
     use_container_width=True
 )
+
 
 # -------------------------
 # TOP ITEMS
