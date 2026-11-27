@@ -50,6 +50,7 @@ def load_data():
                 "loose pcs": d.get("loose_units", 0),
                 "pcs": d.get("total_units", 0),
                 "reserved": d.get("reserved_units", 0),
+                "incoming_stock": d.get("incoming_stock", 0),
                 "Piece Cost": d.get("piece_cost", None),
                 "Last updated": d.get("updated_at")
             })
