@@ -31,7 +31,6 @@ def get_db():
 # DATA LAYER
 # Auto refresh every 12 hours
 # -------------------------
-@st.cache_data(ttl=43200)
 def load_data():
     try:
         db = get_db()
